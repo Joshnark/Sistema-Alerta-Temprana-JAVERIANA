@@ -1,0 +1,292 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: >
+  Sistema de Alerta Temprana para Flota Vehicular
+  Procesa 1000 eventos en 30 segundos y envía alertas por email para emergencias
+
+# Parámetros configurables
+Parameters:
+  EmailAddress:
+    Type: String
+    Description: Email address para recibir alertas de emergencia
+    Default: "tu-email@gmail.com"
+  
+  Environment:
+    Type: String
+    Default: prod
+    AllowedValues: [dev, staging, prod]
+    Description: Environment name
+
+# Variables globales
+Globals:
+  Function:
+    Timeout: 30
+    MemorySize: 512
+    Runtime: nodejs18.x
+    Environment:
+      Variables:
+        ENVIRONMENT: !Ref Environment
+        SNS_TOPIC_ARN: !Ref EmergencyAlertsTopic
+
+Resources:
+  
+  # =================
+  # API GATEWAY
+  # =================
+  VehicleFleetApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "vehicle-fleet-api-${Environment}"
+      StageName: !Ref Environment
+      Description: API para recibir eventos de la flota vehicular
+      # Configuración de throttling según requisitos
+      ThrottleConfig:
+        RateLimit: 15      # Máximo 15 peticiones por segundo
+        BurstLimit: 2000   # Burst predeterminado
+      # Configuración CORS
+      Cors:
+        AllowMethods: "'POST, OPTIONS'"
+        AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
+        AllowOrigin: "'*'"
+      # Logs de acceso
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
+        Format: '$context.requestId $context.status $context.error.message $context.error.messageString'
+      # Logs de ejecución
+      MethodSettings:
+        - ResourcePath: "/*"
+          HttpMethod: "*"
+          LoggingLevel: INFO
+          DataTraceEnabled: true
+          MetricsEnabled: true
+
+  # =================
+  # SQS QUEUE
+  # =================
+  VehicleEventsQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "vehicle-events-queue-${Environment}"
+      # Configuración de la cola
+      VisibilityTimeoutSeconds: 300  # 5 minutos para procesar
+      MessageRetentionPeriod: 1209600  # 14 días
+      ReceiveMessageWaitTimeSeconds: 20  # Long polling
+      # Dead Letter Queue para errores
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt VehicleEventsDeadLetterQueue.Arn
+        maxReceiveCount: 3
+      # Tags
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VehicleFleetAlert
+
+  # Dead Letter Queue para mensajes fallidos
+  VehicleEventsDeadLetterQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "vehicle-events-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600  # 14 días
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: VehicleFleetAlert
+
+  # =================
+  # LAMBDA FUNCTIONS
+  # =================
+  
+  # Lambda para recibir eventos del API Gateway y enviarlos a SQS
+  EventReceiverFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "vehicle-event-receiver-${Environment}"
+      CodeUri: src/event_receiver/
+      Handler: index.handler
+      Description: Recibe eventos del API Gateway y los envía a SQS
+      ReservedConcurrencyLimit: 10  # Máximo 10 instancias según requisitos
+      Environment:
+        Variables:
+          SQS_QUEUE_URL: !Ref VehicleEventsQueue
+      # Políticas IAM
+      Policies:
+        - SQSSendMessagePolicy:
+            QueueName: !GetAtt VehicleEventsQueue.QueueName
+      # Evento del API Gateway
+      Events:
+        VehicleEventApi:
+          Type: Api
+          Properties:
+            RestApiId: !Ref VehicleFleetApi
+            Path: /events
+            Method: post
+
+  # Lambda para procesar eventos de SQS y detectar emergencias
+  EventProcessorFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "vehicle-event-processor-${Environment}"
+      CodeUri: src/event_processor/
+      Handler: index.handler
+      Description: Procesa eventos de SQS y detecta emergencias
+      ReservedConcurrencyLimit: 10  # Máximo 10 instancias según requisitos
+      Environment:
+        Variables:
+          SQS_QUEUE_URL: !Ref VehicleEventsQueue
+      # Políticas IAM
+      Policies:
+        - SNSPublishMessagePolicy:
+            TopicName: !GetAtt EmergencyAlertsTopic.TopicName
+        - SQSPollerPolicy:
+            QueueName: !GetAtt VehicleEventsQueue.QueueName
+      # Evento de SQS
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt VehicleEventsQueue.Arn
+            BatchSize: 10  # Procesar hasta 10 mensajes por vez
+            MaximumBatchingWindowInSeconds: 5  # Esperar máximo 5 segundos
+
+  # =================
+  # SNS TOPIC
+  # =================
+  EmergencyAlertsTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub "emergency-alerts-${Environment}"
+      DisplayName: "Alertas de Emergencia Flota Vehicular"
+      # Configuración de entrega
+      DeliveryPolicy: |
+        {
+          "http": {
+            "defaultHealthyRetryPolicy": {
+              "minDelayTarget": 20,
+              "maxDelayTarget": 20,
+              "numRetries": 3,
+              "numMaxDelayRetries": 0,
+              "numMinDelayRetries": 0,
+              "numNoDelayRetries": 0,
+              "backoffFunction": "linear"
+            }
+          }
+        }
+
+  # Suscripción de email
+  EmergencyEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref EmergencyAlertsTopic
+      Protocol: email
+      Endpoint: !Ref EmailAddress
+
+  # =================
+  # CLOUDWATCH LOGS
+  # =================
+  
+  # Log Group para API Gateway
+  ApiGatewayLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/vehicle-fleet-api-${Environment}"
+      RetentionInDays: 30
+
+  # Log Group para Event Receiver Lambda
+  EventReceiverLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/vehicle-event-receiver-${Environment}"
+      RetentionInDays: 30
+
+  # Log Group para Event Processor Lambda
+  EventProcessorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/vehicle-event-processor-${Environment}"
+      RetentionInDays: 30
+
+  # =================
+  # CLOUDWATCH ALARMS
+  # =================
+  
+  # Alarma para errores en Lambda
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "lambda-errors-${Environment}"
+      AlarmDescription: "Alarma cuando hay errores en las funciones Lambda"
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 5
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref EmergencyAlertsTopic
+
+  # Alarma para throttling en API Gateway
+  ApiThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "api-throttle-${Environment}"
+      AlarmDescription: "Alarma cuando API Gateway hace throttling"
+      MetricName: ThrottledRequests
+      Namespace: AWS/ApiGateway
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: ApiName
+          Value: !Sub "vehicle-fleet-api-${Environment}"
+
+# =================
+# OUTPUTS
+# =================
+Outputs:
+  VehicleFleetApiUrl:
+    Description: "URL del API Gateway para enviar eventos"
+    Value: !Sub "https://${VehicleFleetApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/events"
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiUrl"
+
+  VehicleFleetApiId:
+    Description: "ID del API Gateway"
+    Value: !Ref VehicleFleetApi
+    Export:
+      Name: !Sub "${AWS::StackName}-ApiId"
+
+  SQSQueueUrl:
+    Description: "URL de la cola SQS"
+    Value: !Ref VehicleEventsQueue
+    Export:
+      Name: !Sub "${AWS::StackName}-QueueUrl"
+
+  SNSTopicArn:
+    Description: "ARN del topic SNS para alertas"
+    Value: !Ref EmergencyAlertsTopic
+    Export:
+      Name: !Sub "${AWS::StackName}-TopicArn"
+
+  EventReceiverFunctionArn:
+    Description: "ARN de la función Lambda receptora"
+    Value: !GetAtt EventReceiverFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ReceiverArn"
+
+  EventProcessorFunctionArn:
+    Description: "ARN de la función Lambda procesadora"
+    Value: !GetAtt EventProcessorFunction.Arn
+    Export:
+      Name: !Sub "${AWS::StackName}-ProcessorArn"
+
+  TestCommand:
+    Description: "Comando para probar el endpoint"
+    Value: !Sub |
+      curl -X POST https://${VehicleFleetApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}/events \
+      -H "Content-Type: application/json" \
+      -d '{"type": "Emergency", "vehicle_plate": "TEST-123", "coordinates": {"latitude": 4.6097, "longitude": -74.0817}, "status": "PANIC"}'

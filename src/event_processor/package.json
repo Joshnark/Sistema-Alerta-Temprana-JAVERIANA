@@ -1,0 +1,20 @@
+{
+  "name": "vehicle-event-processor",
+  "version": "1.0.0",
+  "description": "Lambda function para procesar eventos de vehículos y detectar emergencias",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "aws-sdk": "^2.1490.0"
+  },
+  "devDependencies": {
+    "jest": "^29.0.0",
+    "eslint": "^8.0.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
