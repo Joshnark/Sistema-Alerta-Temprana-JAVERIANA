@@ -93,9 +93,3 @@ fields @timestamp, event, event_id, email_sent_at_utc, latency_ms_from_receive
 ```bash
 API_URL="https://<api-id>.execute-api.<region>.amazonaws.com/prod/events" k6 run k6_15rps_67s_car.js --summary-export=summary.json
 ```
-
-## Evidencias Recomendadas para la Entrega
-- `summary.json` y/o `k6_report.md` (con p95, total reqs ≈ 1000, error rate 0).
-- Capturas de CloudWatch Logs con los eventos `emergency_received` y `email_sent`.
-- Screenshot del correo en Gmail con hora de recepción.
-- Link al diagrama `architecture.png` y al `template.yaml` usado.
