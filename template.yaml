@@ -39,26 +39,17 @@ Resources:
       Name: !Sub "vehicle-fleet-api-${Environment}"
       StageName: !Ref Environment
       Description: API para recibir eventos de la flota vehicular
-      # Configuración de throttling según requisitos
-      ThrottleConfig:
-        RateLimit: 15      # Máximo 15 peticiones por segundo
-        BurstLimit: 2000   # Burst predeterminado
-      # Configuración CORS
+      # CORS
       Cors:
         AllowMethods: "'POST, OPTIONS'"
         AllowHeaders: "'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token'"
         AllowOrigin: "'*'"
-      # Logs de acceso
-      AccessLogSetting:
-        DestinationArn: !GetAtt ApiGatewayLogGroup.Arn
-        Format: '$context.requestId $context.status $context.error.message $context.error.messageString'
-      # Logs de ejecución
+      # Logs de ejecución + THROTTLING (aquí va el rate/burst)
       MethodSettings:
         - ResourcePath: "/*"
           HttpMethod: "*"
-          LoggingLevel: INFO
-          DataTraceEnabled: true
-          MetricsEnabled: true
+          ThrottlingRateLimit: 15       # ← tasa sostenida (rps)
+          ThrottlingBurstLimit: 100    # ← burst
 
   # =================
   # SQS QUEUE
@@ -68,7 +59,7 @@ Resources:
     Properties:
       QueueName: !Sub "vehicle-events-queue-${Environment}"
       # Configuración de la cola
-      VisibilityTimeoutSeconds: 300  # 5 minutos para procesar
+      VisibilityTimeout: 300  # 5 minutos para procesar
       MessageRetentionPeriod: 1209600  # 14 días
       ReceiveMessageWaitTimeSeconds: 20  # Long polling
       # Dead Letter Queue para errores
@@ -106,7 +97,6 @@ Resources:
       CodeUri: src/event_receiver/
       Handler: index.handler
       Description: Recibe eventos del API Gateway y los envía a SQS
-      ReservedConcurrencyLimit: 10  # Máximo 10 instancias según requisitos
       Environment:
         Variables:
           SQS_QUEUE_URL: !Ref VehicleEventsQueue
@@ -131,10 +121,10 @@ Resources:
       CodeUri: src/event_processor/
       Handler: index.handler
       Description: Procesa eventos de SQS y detecta emergencias
-      ReservedConcurrencyLimit: 10  # Máximo 10 instancias según requisitos
       Environment:
         Variables:
           SQS_QUEUE_URL: !Ref VehicleEventsQueue
+      # ReservedConcurrentExecutions: 10
       # Políticas IAM
       Policies:
         - SNSPublishMessagePolicy:
@@ -147,8 +137,10 @@ Resources:
           Type: SQS
           Properties:
             Queue: !GetAtt VehicleEventsQueue.Arn
-            BatchSize: 10  # Procesar hasta 10 mensajes por vez
-            MaximumBatchingWindowInSeconds: 5  # Esperar máximo 5 segundos
+            BatchSize: 1                       
+            MaximumBatchingWindowInSeconds: 0    
+            ScalingConfig:
+              MaximumConcurrency: 10   
 
   # =================
   # SNS TOPIC
@@ -159,20 +151,6 @@ Resources:
       TopicName: !Sub "emergency-alerts-${Environment}"
       DisplayName: "Alertas de Emergencia Flota Vehicular"
       # Configuración de entrega
-      DeliveryPolicy: |
-        {
-          "http": {
-            "defaultHealthyRetryPolicy": {
-              "minDelayTarget": 20,
-              "maxDelayTarget": 20,
-              "numRetries": 3,
-              "numMaxDelayRetries": 0,
-              "numMinDelayRetries": 0,
-              "numNoDelayRetries": 0,
-              "backoffFunction": "linear"
-            }
-          }
-        }
 
   # Suscripción de email
   EmergencyEmailSubscription:
