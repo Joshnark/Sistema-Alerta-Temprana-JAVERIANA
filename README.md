@@ -34,27 +34,6 @@ k6_15rps_67s_car.js         # Carga: 15 rps x 67 s ≈ 1005 req
 - **Manejo de Fallos**: DLQ con `maxReceiveCount`=3 permite análisis y reprocesamiento manual.
 - **Observabilidad**: Logs en JSON con `event_id` para correlación y medición (receiver→processor).
 
-## Criterios de Evaluación y Ponderación
-
-| Criterio                              | Ponderación | Evidencia sugerida                                                                 |
-|--------------------------------------|:-----------:|------------------------------------------------------------------------------------|
-| Justificación de Decisiones de Arquitectura | **0.5**     | Sección **Decisiones de Arquitectura** con motivaciones y trade-offs explícitos.   |
-| Atributo de Calidad más Importante   | **0.5**     | Sección **Atributo de Calidad Prioritario** con métricas y cómo se garantizan.     |
-| Diagrama de Arquitectura             | **0.5**     | Archivo **architecture.png** referenciado e incluido en el documento.              |
-| Tácticas de Arquitectura             | **1.0**     | Sección **Tácticas de Arquitectura** con mapeo a objetivos del reto.               |
-
-**Total ponderado posible:** **2.5**
-
-### Plantilla de Calificación (rellenar por el evaluador)
-- Justificación de Decisiones de Arquitectura: ____ / 0.5  
-- Atributo de Calidad más Importante: ____ / 0.5  
-- Diagrama de Arquitectura: ____ / 0.5  
-- Tácticas de Arquitectura: ____ / 1.0  
-
-**Puntaje total:** ____ / 2.5
-
-> Nota: El documento ya incluye las secciones y artefactos solicitados. Para evidenciar cumplimiento adicional, anexar `summary.json` de k6, capturas de CloudWatch (`emergency_received`, `email_sent`) y screenshot del correo recibido en Gmail con su hora exacta.
-
 ## Logs de Ejecución (formatos)
 ### Recepción de emergencia (Receiver)
 ```json
